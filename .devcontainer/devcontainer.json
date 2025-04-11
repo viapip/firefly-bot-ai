@@ -1,0 +1,28 @@
+{
+  "name": "ts-starter",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:0-20",
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": true,
+      "installOhMyZsh": true,
+      "upgradePackages": true,
+      "username": "automatic",
+      "userUid": "automatic",
+      "userGid": "automatic"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "yy0931.vscode-sqlite3-editor",
+        "esbenp.prettier-vscode",
+        "arcanis.vscode-zipfs",
+        "dbaeumer.vscode-eslint",
+        "antfu.file-nesting",
+        "yoavbls.pretty-ts-errors"
+      ]
+    }
+  },
+
+  "postCreateCommand": "yarn install"
+}

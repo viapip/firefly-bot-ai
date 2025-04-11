@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "firefly-finance-bot",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "yarn@4.8.1",
+  "description": "Telegram bot for processing financial receipts and payment screenshots",
+  "author": "",
+  "license": "MIT",
+  "homepage": "",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "bugs": "",
+  "keywords": [],
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "*": [
+        "./dist/*",
+        "./dist/index.d.ts"
+      ]
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "pkgroll --minify",
+    "typecheck": "tsc --noEmit",
+    "dev": "esno src/index.ts",
+    "start": "node --experimental-modules --experimental-import-meta-resolve dist/index.js",
+    "release": "yarn publish",
+    "lint": "eslint --ext=ts,js,vue .",
+    "clean": "yarn exec rm -rf dist"
+  },
+  "dependencies": {
+    "consola": "^3.4.2",
+    "dotenv": "^16.4.5",
+    "esm": "^3.2.25",
+    "esno": "^4.8.0",
+    "telegraf": "^4.16.3",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/esm": "^3.2.2",
+    "@types/node": "^22.14.0",
+    "@typescript-eslint/eslint-plugin": "^8.29.0",
+    "@typescript-eslint/parser": "^8.29.0",
+    "@viapip/eslint-config": "^0.1.1",
+    "@yarnpkg/doctor": "^4.0.3",
+    "eslint": "^9.23.0",
+    "jsonc-eslint-parser": "^2.4.0",
+    "lint-staged": "^15.5.0",
+    "pkgroll": "^2.12.1",
+    "simple-git-hooks": "^2.12.1",
+    "tslib": "^2.8.1",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "yarn lint-staged"
+  },
+  "lint-staged": {
+    "*.{ts,js,vue}": "eslint --fix"
+  },
+  "dependenciesMeta": {
+    "@rollup/plugin-typescript@11.1.1": {
+      "unplugged": true
+    },
+    "rollup-plugin-esbuild@5.0.0": {
+      "unplugged": true
+    }
+  }
+}
