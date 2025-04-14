@@ -215,46 +215,139 @@ export class FinanceBot {
     }
 
     if (conversation.status === STATUS_MAP.IDLE) {
-      await ctx.reply('Please first send a receipt photo or start with the /start command')
+      // Process text as a potential transaction or receipt description
+      await this.handleTextAsTransaction(ctx, userId, text)
 
       return
     }
 
     // Handle comments normally if awaiting comment or confirmation
-    if (conversation.status === STATUS_MAP.AWAITING_COMMENT || conversation.status === STATUS_MAP.AWAITING_CONFIRMATION) {
+    if (conversation.status === STATUS_MAP.AWAITING_COMMENT) {
       await this.handleComment(ctx, userId, text, conversation)
     }
+    else if (conversation.status === STATUS_MAP.AWAITING_CONFIRMATION) {
+      // If awaiting confirmation, instruct user to use buttons
+      await ctx.reply('Please use the buttons above to confirm, refine, or cancel the transaction.')
+    }
+  }
+
+  // New method to handle text as a potential transaction
+  private async handleTextAsTransaction(
+    ctx: Context,
+    userId: string,
+    text: string,
+  ): Promise<void> {
+    // Add the text as a user message
+    this.conversationManager.addUserMessage(userId, text)
+
+    // Instead of processing immediately, just set the state to AWAITING_COMMENT
+    this.conversationManager.updateStatus(userId, STATUS_MAP.AWAITING_COMMENT)
+
+    // Let the user know they need to type "next" to process
+    await ctx.reply('I\'ve received your transaction description. Type "next" to process it, or add more details with another message.')
   }
 
   private async handleNextCommand(ctx: Context, userId: string, conversation: ReturnType<ConversationManager['getOrCreateConversation']>): Promise<void> {
-    if (!conversation.currentImages || conversation.currentImages.length === 0) {
-      await ctx.reply('No images found to process. Please send a receipt photo first.')
-
-      return
-    }
     // Add an empty message to represent the "next" command in history
     this.conversationManager.addUserMessage(userId, '') // No need to mark as image
-    await this.processReceipt(ctx, userId)
+
+    if (!conversation.currentImages || conversation.currentImages.length === 0) {
+      // No images, but we might have text for a text-based transaction
+      // Process the text transaction
+      await this.processTextTransaction(ctx, userId)
+    }
+    else {
+      // We have images, process as a receipt
+      await this.processReceipt(ctx, userId)
+    }
   }
 
-  private async handleComment(ctx: Context, userId: string, text: string, conversation: ReturnType<ConversationManager['getOrCreateConversation']>): Promise<void> {
+  // Method to process a text-based transaction after "next" command
+  private async processTextTransaction(ctx: Context, userId: string): Promise<void> {
+    await ctx.reply('Processing your transaction description, please wait...')
+    this.conversationManager.updateStatus(userId, STATUS_MAP.PROCESSING)
+
+    try {
+      // Process the text using AI service
+      const transactions = await this.processTextAsTransaction(ctx, userId)
+
+      // Add AI response to dialog history
+      const aiResponse = this.uiFormatter.generateAIResponseMessage(transactions)
+      this.conversationManager.addAssistantMessage(userId, aiResponse)
+
+      // Show result to user for confirmation
+      await this.showTransactionsForConfirmation(ctx, transactions)
+    }
+    catch (error) {
+      await this.handleProcessingError(ctx, userId, error)
+    }
+  }
+
+  // Method to process text using AI
+  private async processTextAsTransaction(
+    ctx: Context,
+    userId: string,
+  ): Promise<Transaction[]> {
+    // Get categories, tags, and budget limits for AI processing
+    const [
+      categories,
+      tags,
+      budgetLimits,
+    ] = await Promise.all([
+      this.financialService.getCategories(),
+      this.financialService.getTags(),
+      this.financialService.getBudgetLimits(),
+      this.financialService.fetchAndSetDefaultAccount(),
+    ])
+
+    // Get conversation messages for context
+    const messages = this.conversationManager.getMessagesForAI(userId)
+
+    // Process the text using AI service
+    const aiResult = await this.aiService.processReceiptAndComments(
+      [], // No images for text-based transactions
+      messages,
+      categories,
+      tags,
+      budgetLimits,
+    )
+
+    const transactions = Array.isArray(aiResult) ? aiResult : [aiResult]
+
+    // Save result and update status
+    this.conversationManager.saveTransactions(userId, transactions)
+    this.conversationManager.updateStatus(userId, STATUS_MAP.AWAITING_CONFIRMATION)
+
+    return transactions
+  }
+
+  private async handleComment(ctx: Context, userId: string, text: string, conversation: ReturnType<ConversationManager['getOrCreateConversation']>) {
     // Add comment to dialog history
     this.conversationManager.addUserMessage(userId, text)
 
-    // If awaiting comment, process immediately after comment
+    // If awaiting comment, just acknowledge and wait for "next"
     if (conversation.status === STATUS_MAP.AWAITING_COMMENT) {
-      if (!conversation.currentImages || conversation.currentImages.length === 0) {
-        await ctx.reply('No images found to process. Please send a receipt photo first.')
-
-        return
-      }
-      await this.processReceipt(ctx, userId)
+      // Acknowledge the comment but don't process yet
+      await ctx.reply('Comment added. Type "next" to process, or send more details/photos.')
+      // DO NOT trigger processing here. Processing is triggered by the "next" command.
+      // Prevent falling through
     }
+    // This handles refinement text *after* the user clicks the "Refine" button
+    // and the status is updated by transitionToRefinement (likely back to AWAITING_COMMENT or similar).
+    // The check in handleTextMessage prevents reaching here if status is still AWAITING_CONFIRMATION.
     else if (conversation.status === STATUS_MAP.AWAITING_CONFIRMATION) {
-      // If awaiting confirmation, just acknowledge the refinement text
+      // If awaiting confirmation, refinement text triggers reprocessing
       await ctx.reply('Processing your refinement request...')
-      // Re-process with the new comment added to history
-      await this.processReceipt(ctx, userId)
+
+      // Check if we have images or if this is a text-based transaction
+      if (conversation.currentImages && conversation.currentImages.length > 0) {
+        // For photo-based transactions, use processReceipt
+        await this.processReceipt(ctx, userId)
+      }
+      else {
+        // For text-based transactions, use processTextTransaction
+        await this.processTextTransaction(ctx, userId)
+      }
     }
   }
 
@@ -362,11 +455,73 @@ export class FinanceBot {
   }
 
   private async showTransactionsForConfirmation(ctx: Context, transactions: Transaction[]): Promise<void> {
-    const message = transactions.length === 1
+    const fullMessage = transactions.length === 1
       ? this.uiFormatter.formatSingleTransactionConfirmation(transactions[0])
       : this.uiFormatter.formatMultipleTransactionsConfirmation(transactions)
 
-    await ctx.reply(message, this.uiFormatter.getConfirmationKeyboard())
+    const MAX_LENGTH = 4096 // Telegram message length limit
+    const keyboard = this.uiFormatter.getConfirmationKeyboard()
+
+    if (fullMessage.length <= MAX_LENGTH) {
+      // Message is short enough, send as is with keyboard
+      await ctx.reply(fullMessage, keyboard)
+    }
+    else {
+      // Message is too long, split it
+      const chunks: string[] = []
+      let currentChunk = ''
+      // Split primarily by double newline, then single newline, then spaces if necessary
+      const lines = fullMessage.split('\n\n') // Prefer splitting transaction blocks
+
+      for (const line of lines) {
+        // Check if adding the next block (plus separator) exceeds the limit
+        if (currentChunk.length + line.length + (currentChunk.length > 0 ? 2 : 0) > MAX_LENGTH) {
+          // If adding the block exceeds limit, push current chunk and start new one
+          // But first, try splitting the oversized block by single newlines
+          if (line.length > MAX_LENGTH) {
+            // If the block itself is too long, split it by single newline
+            const subLines = line.split('\n')
+            for (const subLine of subLines) {
+              if (currentChunk.length + subLine.length + (currentChunk.length > 0 ? 1 : 0) > MAX_LENGTH) {
+                chunks.push(currentChunk)
+                currentChunk = subLine
+              }
+              else {
+                currentChunk += (currentChunk.length > 0 ? '\n' : '') + subLine
+              }
+            }
+            // If anything remains in currentChunk after splitting the long line, push it
+            if (currentChunk.length > 0) {
+              chunks.push(currentChunk)
+              currentChunk = '' // Reset for the next line/block
+            }
+          }
+          else {
+            // The block isn't too long itself, but adding it makes the chunk too long
+            // Push the current chunk and start the new one with this block
+            chunks.push(currentChunk)
+            currentChunk = line
+          }
+        }
+        else {
+          // Add the block to the current chunk
+          currentChunk += (currentChunk.length > 0 ? '\n\n' : '') + line
+        }
+      }
+
+      // Add the last remaining chunk
+      if (currentChunk.length > 0) {
+        chunks.push(currentChunk)
+      }
+
+      // Send all chunks except the last one
+      for (let i = 0; i < chunks.length - 1; i++) {
+        await ctx.reply(chunks[i])
+      }
+
+      // Send the last chunk with the keyboard
+      await ctx.reply(chunks[chunks.length - 1], keyboard)
+    }
   }
 
   private async confirmTransaction(ctx: Context, userId: string): Promise<void> {

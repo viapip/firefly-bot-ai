@@ -29,11 +29,16 @@ export class AISDKClient implements AIServiceClient {
     try {
       this.openAI = createOpenAI({
         apiKey,
+
         baseURL: baseUrl,
+        compatibility: 'strict',
         headers: {
           'HTTP-Referer': refererUrl,
         },
-      })(model) // Pass the specific model to use
+      })(model, {
+        parallelToolCalls: false,
+        reasoningEffort: 'medium',
+      }) // Pass the specific model to use
     }
     catch (error) {
       console.error('Error initializing AI service:', error)
@@ -278,10 +283,12 @@ export class AISDKClient implements AIServiceClient {
 
       // Request transaction data from the AI model using the multiple transactions schema
       const { object: resultData } = await generateObject({
+        abortSignal: AbortSignal.timeout(180000),
+        maxRetries: 4,
         messages: aiMessages,
         model: this.openAI,
         schema: multipleTransactionsSchema,
-        temperature: 0.2, // Low temperature for more deterministic output
+        temperature: 0.4, // Low temperature for more deterministic output
       })
 
       // console.log('AI result data:', JSON.stringify(resultData, null, 2)); // Kept for debugging
