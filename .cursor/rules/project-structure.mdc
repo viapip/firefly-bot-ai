@@ -1,0 +1,21 @@
+---
+description: Project structure and file organization guidelines
+globs: 
+alwaysApply: false
+---
+# Project Structure of `src` Directory
+
+Here is a summary of the main components within the `src` directory:
+
+| Component                 | Type      | Description                                                                            |
+| :------------------------ | :-------- | :------------------------------------------------------------------------------------- |
+| `bot/`                    | Directory | Contains the core logic and modules for the Telegram bot.                              |
+| `config/`                 | Directory | Holds configuration-related files and type definitions.                                |
+| `constants.ts`            | File      | Defines various constants used throughout the application.                             |
+| `domain/`                 | Directory | Contains domain-specific types and interfaces.                                         |
+| `index.ts`                | File      | The application's entry point, handling setup, configuration, and bot start.           |
+| `services/`               | Directory | Contains modules for interacting with external services (AI, financial, conversation). |
+| `services/ai/`            | Directory | Handles integration with the AI service (OpenRouter).                                  |
+| `services/conversation/ ` | Directory | Manages the state and flow of user conversations.                                      |
+| `services/financial/`     | Directory | Handles integration with the financial service (Firefly-III).                          |
+| `utils/`                  | Directory | Contains general-purpose utility functions.                                            |

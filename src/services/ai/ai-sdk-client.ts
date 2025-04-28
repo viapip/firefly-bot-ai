@@ -173,7 +173,11 @@ export class AISDKClient implements AIServiceClient {
       : 'No predefined tags available.'
 
     // Read the prompt template from the project root
-    let systemPromptTemplate = this.prompt
+    const [currentDate] = new Date()
+      .toISOString()
+      .split('T')
+
+    let systemPromptTemplate = `Today's date is ${currentDate}.\n ${this.prompt}`
 
     // Replace all placeholders
     const placeholders: Record<string, string> = {
@@ -187,6 +191,36 @@ export class AISDKClient implements AIServiceClient {
     for (const [placeholder, value] of Object.entries(placeholders)) {
       systemPromptTemplate = systemPromptTemplate.replaceAll(placeholder, value)
     }
+
+    systemPromptTemplate = `${systemPromptTemplate}\n\n
+    ##  USER COMMENTS HANDLING SYSTEM
+
+### PRIORITY RULES:
+1. USER COMMENTS HAVE THE HIGHEST PRIORITY OVER ALL OTHER RULES
+2. When reprocessing a receipt, ALWAYS start by analyzing user comments
+3. Any standard rule IS OVERRIDDEN if the comment indicates otherwise
+4. If the user provides clarifications or additional comments, THEY MUST BE GIVEN TOP PRIORITY
+
+### COMMENT PROCESSING WORKFLOW:
+STEP 1: Check for user comments in the request history
+STEP 2: If comments exist - create a list of specific instructions from them
+STEP 3: Process the receipt, applying instructions from comments as priority rules
+STEP 4: Create transactions according to updated rules
+STEP 5: Before finalizing, verify that EVERY comment has been properly addressed
+
+### VERIFICATION MECHANISM:
+Before submitting your response, explicitly confirm:
+- Pay special attention to the MOST RECENT comments
+- Which comments were identified
+- How each comment was implemented in the transactions
+- What specific changes were made to follow user instructions
+
+### STRICT STRONG RULES:
+- IF THE USER PROVIDES CLARIFICATIONS OR ADDITIONAL COMMENTS, TAKE THEM INTO ACCOUNT WHEN FORMING TRANSACTIONS!!
+- PAY CLOSE ATTENTION TO THE USER'S MOST RECENT COMMENTS, AS THEY MAY OVERRIDE THE DEFAULT CATEGORIZATION RULES!!
+- WHEN THE USER REQUESTS SPECIFIC CHANGES, THEY MUST BE APPLIED EXACTLY AS STATED!!
+- ALWAYS CONFIRM HOW USER COMMENTS WERE ADDRESSED IN YOUR RESPONSE!!
+`
 
     // Initialize AI messages with the system prompt
     const aiMessages: CoreMessage[] = [{ content: systemPromptTemplate, role: 'system' }]

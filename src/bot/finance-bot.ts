@@ -12,7 +12,7 @@ import type { AIServiceClient } from '../services/ai/interfaces'
 import type { ConversationManager } from '../services/conversation/interfaces'
 import type { FinancialServiceClient } from '../services/financial/interfaces'
 
-import { CALLBACK_DATA_CANCEL, CALLBACK_DATA_CONFIRM, CALLBACK_DATA_REFINE, CALLBACK_DATA_RETRY, COMMAND_NEXT, CONVERSATION_CLEANUP_INTERVAL_MS, MAX_PROCESSING_ATTEMPTS, STATUS_MAP } from '../constants'
+import { CALLBACK_DATA_CANCEL, CALLBACK_DATA_CONFIRM, CALLBACK_DATA_NEXT, CALLBACK_DATA_REFINE, CALLBACK_DATA_RETRY, COMMAND_NEXT, CONVERSATION_CLEANUP_INTERVAL_MS, MAX_PROCESSING_ATTEMPTS, STATUS_MAP } from '../constants'
 import { MediaGroupHandler } from './media-group-handler'
 import { ReceiptProcessor } from './receipt-processor'
 import { UIFormatter } from './ui-formatter'
@@ -161,7 +161,7 @@ export class FinanceBot {
       ? 'I received your receipt photo. Add a comment or type "next" to continue without a comment.'
       : 'I received another photo. Add a comment or send more photos. Type "next" to process.'
 
-    await ctx.reply(responseMessage)
+    await ctx.reply(responseMessage, this.uiFormatter.getRefinementNextKeyboard())
   }
 
   private async handlePhotoProcessingError(ctx: Context, error: unknown, mediaGroupId?: string): Promise<void> {
@@ -222,12 +222,10 @@ export class FinanceBot {
     }
 
     // Handle comments normally if awaiting comment or confirmation
-    if (conversation.status === STATUS_MAP.AWAITING_COMMENT) {
+    if (
+      conversation.status === STATUS_MAP.AWAITING_COMMENT || conversation.status === STATUS_MAP.AWAITING_CONFIRMATION
+    ) {
       await this.handleComment(ctx, userId, text, conversation)
-    }
-    else if (conversation.status === STATUS_MAP.AWAITING_CONFIRMATION) {
-      // If awaiting confirmation, instruct user to use buttons
-      await ctx.reply('Please use the buttons above to confirm, refine, or cancel the transaction.')
     }
   }
 
@@ -328,7 +326,7 @@ export class FinanceBot {
     // If awaiting comment, just acknowledge and wait for "next"
     if (conversation.status === STATUS_MAP.AWAITING_COMMENT) {
       // Acknowledge the comment but don't process yet
-      await ctx.reply('Comment added. Type "next" to process, or send more details/photos.')
+      await ctx.reply('Comment added. Type "next" to process, or send more details/photos.', this.uiFormatter.getRefinementNextKeyboard())
       // DO NOT trigger processing here. Processing is triggered by the "next" command.
       // Prevent falling through
     }
@@ -388,6 +386,19 @@ export class FinanceBot {
     else if (data === CALLBACK_DATA_RETRY) {
       await ctx.reply('Retrying your request, please wait...')
       await this.processReceipt(ctx, userId)
+    }
+    else if (data === CALLBACK_DATA_NEXT) {
+      // Simulate the "next" command logic
+      const conversation = this.conversationManager.getOrCreateConversation(userId)
+      // Answer the callback query first to remove the loading state from the button
+      try {
+        await ctx.answerCbQuery()
+      }
+      catch (error) {
+        console.warn('Failed to answer next callback query:', error)
+        // Continue anyway, the button might have just timed out
+      }
+      await this.handleNextCommand(ctx, userId, conversation)
     }
     else {
       console.warn(`Received unknown callback query data: ${data}`)

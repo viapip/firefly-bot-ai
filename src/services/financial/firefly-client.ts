@@ -80,7 +80,6 @@ interface FireflyBudget {
   attributes: FireflyBudgetAttributes
   id: string
   type: 'budgets' // Or the relevant type string
-  // links?: FireflyLinks; // Optional links object if needed
 }
 
 interface FireflyBudgetsResponse {
@@ -296,7 +295,7 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
           category_name: transaction.category.name, // Using name is fine if Firefly can resolve it
           // category_id: transaction.category.id, // Alternatively, use ID if available and preferred
           date: transaction.date.toISOString(), // Use full ISO 8601 date-time string
-          description: transaction.description,
+          description: `[BOT] ${transaction.description}`,
           source_id: sourceId, // Add the default source account ID
           type: 'withdrawal' as const,
         }
@@ -328,7 +327,7 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
       }
       else {
         // Используем свойство groupTitle, если оно доступно у первой транзакции
-        const groupTitle = (transactions[0] as any).groupTitle || `Split: ${transactions[0]?.description || 'Grouped Transaction'}`
+        const groupTitle = (transactions[0] as any).groupTitle || `[BOT] Split: ${transactions[0]?.description || 'Grouped Transaction'}`
 
         requestBody = {
           group_title: groupTitle,
@@ -378,10 +377,10 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
       const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0) // Day 0 of next month is the last day of current month
 
       // Format dates as YYYY-MM-DD for the API query
-      const startDateString = startOfMonth.toISOString()
-        .split('T')[0]
-      const endDateString = endOfMonth.toISOString()
-        .split('T')[0]
+      const [startDateString] = startOfMonth.toISOString()
+        .split('T')
+      const [endDateString] = endOfMonth.toISOString()
+        .split('T')
 
       // Construct the URL with query parameters
       const url = new URL(`${this.baseUrl}/api/v1/budgets`)

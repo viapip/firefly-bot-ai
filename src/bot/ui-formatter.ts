@@ -1,6 +1,8 @@
+import { Markup } from 'telegraf'
+
 import type { Transaction } from '../domain/types'
 
-import { CALLBACK_DATA_CANCEL, CALLBACK_DATA_CONFIRM, CALLBACK_DATA_REFINE, CALLBACK_DATA_RETRY } from '../constants'
+import { CALLBACK_DATA_CANCEL, CALLBACK_DATA_CONFIRM, CALLBACK_DATA_NEXT, CALLBACK_DATA_REFINE, CALLBACK_DATA_RETRY } from '../constants'
 
 const NO_TAGS_PLACEHOLDER = 'No tags'
 const DATE_NOT_AVAILABLE_PLACEHOLDER = 'N/A'
@@ -31,6 +33,10 @@ export class UIFormatter {
         ],
       },
     }
+  }
+
+  public getRefinementNextKeyboard() {
+    return Markup.inlineKeyboard([Markup.button.callback('Next', CALLBACK_DATA_NEXT)])
   }
 
   public formatSingleTransaction(transaction: Transaction): string {

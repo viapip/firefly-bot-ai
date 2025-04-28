@@ -1,0 +1,17 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Inbox Zero AI - Master Rule Index
+This document serves as the central index for all active Cursor rules within this repository, organized by category. These rules define processes, structures, and guidelines for development.
+
+## Core & General
+
+Fundamental project structure, setup, and general development guidelines.
+
+| Rule File                          | Description                                                 |
+| :--------------------------------- | :---------------------------------------------------------- |
+| @cursor-rules.mdc                  | How to add or edit Cursor rules in our project              |
+| @project-structure.mdc             | Project structure and file organization guidelines          |
+| @task-list.mdc                     | Guidelines for creating and managing task lists             |

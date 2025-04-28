@@ -14,10 +14,11 @@ export const CALLBACK_DATA_CONFIRM = 'confirm'
 export const CALLBACK_DATA_REFINE = 'refine'
 export const CALLBACK_DATA_CANCEL = 'cancel'
 export const CALLBACK_DATA_RETRY = 'retry'
+export const CALLBACK_DATA_NEXT = 'next_refine'
 
 export const DEFAULT_OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
 export const DEFAULT_REFERER_URL = 'https://finance-bot.app'
-export const DEFAULT_MODEL = 'anthropic/claude-3-5-sonnet'
+export const DEFAULT_MODEL = 'google/gemini-2.5-flash-preview'
 
 export const PROMPT_TEMPLATE_FILE = 'prompt.template'
 
