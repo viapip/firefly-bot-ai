@@ -2,6 +2,7 @@ version: '3.8'
 
 services:
   firefly-bot:
+    image: viapip/fireflyiii-aibot:latest
     build:
       context: .
       dockerfile: Dockerfile
