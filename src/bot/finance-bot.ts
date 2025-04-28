@@ -1,4 +1,5 @@
 // bot/finance-bot.ts
+import type { CallbackQuery } from '@telegraf/types'
 import type { Context, NarrowedContext } from 'telegraf'
 import type { Message, Update } from 'telegraf/types'
 
@@ -17,11 +18,13 @@ import { MediaGroupHandler } from './media-group-handler'
 import { ReceiptProcessor } from './receipt-processor'
 import { UIFormatter } from './ui-formatter'
 
-// Constants
+// Type for callback handler functions
+type CallbackHandler = (ctx: Context, userId: string, query: CallbackQuery.DataQuery) => Promise<void>
 
 export class FinanceBot {
   private aiService: AIServiceClient
   private bot: Telegraf
+  private callbackHandlers!: Map<string, CallbackHandler>
   private config: BotConfig
   private conversationManager: ConversationManager
   private financialService: FinancialServiceClient
@@ -55,6 +58,7 @@ export class FinanceBot {
     this.uiFormatter = new UIFormatter()
 
     this.setupHandlers()
+    this.setupCallbackHandlers() // Initialize the callback handlers
 
     // Periodic cleanup of old conversations
     setInterval(() => {
@@ -78,6 +82,17 @@ export class FinanceBot {
 
     // Callback query handling
     this.bot.on('callback_query', this.handleCallbackQuery.bind(this))
+  }
+
+  // Initialize the map of callback handlers
+  private setupCallbackHandlers(): void {
+    this.callbackHandlers = new Map<string, CallbackHandler>([
+      [CALLBACK_DATA_CONFIRM, this.handleConfirmCallback.bind(this)],
+      [CALLBACK_DATA_REFINE, this.handleRefineCallback.bind(this)],
+      [CALLBACK_DATA_CANCEL, this.handleCancelCallback.bind(this)],
+      [CALLBACK_DATA_RETRY, this.handleRetryCallback.bind(this)],
+      [CALLBACK_DATA_NEXT, this.handleNextCallback.bind(this)],
+    ])
   }
 
   // Start the bot
@@ -352,8 +367,7 @@ export class FinanceBot {
   private async handleCallbackQuery(ctx: Context): Promise<void> {
     // Ensure callbackQuery and data exist
     if (!ctx.callbackQuery || !('data' in ctx.callbackQuery)) {
-      console.warn('Received callback query without data.')
-      // Attempt to answer anyway to remove the loading state, but log the issue.
+      console.warn('Received callback query without data or not a data query.')
       try {
         await ctx.answerCbQuery()
       }
@@ -368,50 +382,81 @@ export class FinanceBot {
     // Cancel any pending media group processing
     this.mediaGroupHandler.cancelPendingMediaGroupForUser(userId)
 
-    const query = ctx.callbackQuery // Now known to have 'data'
+    const query = ctx.callbackQuery // Already checked it has 'data'
     const { data } = query
 
-    if (data === CALLBACK_DATA_CONFIRM) {
-      await this.confirmTransaction(ctx, userId)
-    }
-    else if (data === CALLBACK_DATA_REFINE) {
-      // Transition dialog to await further comments for refinement
-      this.conversationManager.transitionToRefinement(userId) // Assumes this updates status correctly
-      await ctx.reply('Okay, the transaction details are ready for refinement. Please provide additional details or corrections.')
-    }
-    else if (data === CALLBACK_DATA_CANCEL) {
-      this.conversationManager.resetConversation(userId)
-      await ctx.reply('Transaction cancelled. Send me a new receipt when you\'re ready.')
-    }
-    else if (data === CALLBACK_DATA_RETRY) {
-      await ctx.reply('Retrying your request, please wait...')
-      await this.processReceipt(ctx, userId)
-    }
-    else if (data === CALLBACK_DATA_NEXT) {
-      // Simulate the "next" command logic
-      const conversation = this.conversationManager.getOrCreateConversation(userId)
-      // Answer the callback query first to remove the loading state from the button
+    // Find the handler in the map
+    const handler = this.callbackHandlers.get(data)
+
+    if (handler) {
       try {
-        await ctx.answerCbQuery()
+        await handler(ctx, userId, query)
       }
       catch (error) {
-        console.warn('Failed to answer next callback query:', error)
-        // Continue anyway, the button might have just timed out
+        console.error(`Error executing callback handler for data "${data}":`, error)
+        // Attempt to notify the user about the error
+        try {
+          await ctx.reply('An internal error occurred while processing your request. Please try again later or contact support.')
+        }
+        catch (replyError) {
+          console.error('Failed to send error reply to user:', replyError)
+        }
       }
-      await this.handleNextCommand(ctx, userId, conversation)
     }
     else {
       console.warn(`Received unknown callback query data: ${data}`)
     }
 
+    // Always attempt to answer the callback query to remove the loading state
     try {
       await ctx.answerCbQuery()
     }
-    catch (error) {
-      console.warn('Failed to answer callback query:', error)
-      // Potentially the query expired, ignore safely
+    catch {
+      // Ignore errors here, likely due to timeout or already answered
+      // console.warn('Failed to answer callback query (potentially expired):', error);
     }
   }
+
+  // --- Callback Handler Methods ---
+
+  private async handleConfirmCallback(ctx: Context, userId: string): Promise<void> {
+    await this.confirmTransaction(ctx, userId)
+  }
+
+  private async handleRefineCallback(ctx: Context, userId: string): Promise<void> {
+    this.conversationManager.transitionToRefinement(userId)
+    await ctx.reply('Okay, the transaction details are ready for refinement. Please provide additional details or corrections.')
+  }
+
+  private async handleCancelCallback(ctx: Context, userId: string): Promise<void> {
+    this.conversationManager.resetConversation(userId)
+    await ctx.reply('Transaction cancelled. Send me a new receipt when you\'re ready.')
+  }
+
+  private async handleRetryCallback(ctx: Context, userId: string): Promise<void> {
+    await ctx.reply('Retrying your request, please wait...')
+    // Check if we should retry processing images or text
+    const conversation = this.conversationManager.getOrCreateConversation(userId)
+    if (conversation.currentImages && conversation.currentImages.length > 0) {
+      await this.processReceipt(ctx, userId)
+    }
+    else {
+      // Assume retry for text processing if no images
+      await this.processTextTransaction(ctx, userId)
+    }
+  }
+
+  private async handleNextCallback(ctx: Context, userId: string): Promise<void> {
+    const conversation = this.conversationManager.getOrCreateConversation(userId)
+    // Need to answer the callback query here specifically for 'next'
+    // because handleNextCommand doesn't inherently answer it.
+    // We already attempt to answer globally at the end of handleCallbackQuery,
+    // so specific answering here might be redundant unless we want custom text.
+    // Let's remove the potentially problematic answerCbQuery call here and rely on the final one.
+    await this.handleNextCommand(ctx, userId, conversation)
+  }
+
+  // --- End Callback Handler Methods ---
 
   // Receipt processing using separated service
   private async processReceipt(ctx: Context, userId: string): Promise<void> {
