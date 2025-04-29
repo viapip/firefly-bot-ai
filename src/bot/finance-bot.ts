@@ -257,7 +257,7 @@ export class FinanceBot {
     this.conversationManager.updateStatus(userId, STATUS_MAP.AWAITING_COMMENT)
 
     // Let the user know they need to type "next" to process
-    await ctx.reply('I\'ve received your transaction description. Type "next" to process it, or add more details with another message.')
+    await ctx.reply('I\'ve received your transaction description. Type "next" to process it, or add more details with another message.', this.uiFormatter.getRefinementNextKeyboard())
   }
 
   private async handleNextCommand(ctx: Context, userId: string, conversation: ReturnType<ConversationManager['getOrCreateConversation']>): Promise<void> {
