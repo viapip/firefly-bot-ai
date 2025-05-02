@@ -28,11 +28,6 @@ export interface FinancialServiceClient {
   sendTransactions: (transactions: Transaction[]) => Promise<boolean>
 
   /**
-   * Проверяет соединение с финансовым сервисом
-   */
-  checkConnection: () => Promise<boolean>
-
-  /**
    * Получает список лимитов бюджетов из финансового сервиса
    */
   getBudgetLimits: () => Promise<BudgetLimit[]>

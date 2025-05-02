@@ -1,8 +1,6 @@
-// services/financial/firefly-client.ts
 import type { BudgetLimit, Category, Tag, Transaction } from '../../domain/types'
 import type { FinancialServiceClient } from './interfaces'
 
-// Interfaces for Firefly-III API based on OpenAPI spec
 interface FireflyCategory {
   attributes: {
     name: string
@@ -14,7 +12,6 @@ interface FireflyCategoriesResponse {
   data: FireflyCategory[]
 }
 
-// Add interface for Tags
 interface FireflyTag {
   attributes: {
     tag: string
@@ -27,12 +24,10 @@ interface FireflyTagsResponse {
   data: FireflyTag[]
 }
 
-// Add interfaces for Accounts
 interface FireflyAccountAttributes {
-  account_role: null | string // e.g., 'defaultAsset', null
+  account_role: null | string
   name: string
-  type: string // e.g., 'asset', 'expense', etc.
-  // Add other relevant attributes if needed based on the OpenAPI spec
+  type: string
 }
 
 interface FireflyAccount {
@@ -42,55 +37,50 @@ interface FireflyAccount {
 
 interface FireflyAccountsResponse {
   data: FireflyAccount[]
-  // Add meta and links if pagination is needed
 }
 
-// Interfaces for Budgets (/api/v1/budgets)
 interface FireflyBudgetSpent {
   currency_code?: string
   currency_decimal_places?: number
   currency_id?: string
   currency_symbol?: string
-  sum: string // Represented as string like "123.45"
+  sum: string
 }
 
 interface FireflyBudgetAttributes {
   active: boolean
-  // 'limit' might not exist directly on /budgets, 'amount' usually represents the budget value for the period
   auto_budget_amount?: null | string
   auto_budget_currency_code?: null | string
   auto_budget_currency_id?: null | string
-  auto_budget_period?: null | string // e.g., 'monthly', 'yearly'
-  auto_budget_type?: null | string // e.g., 'reset', 'rollover', 'none'
-  created_at?: string // ISO 8601 Date string
+  auto_budget_period?: null | string
+  auto_budget_type?: null | string
+  created_at?: string
   currency_code?: string
   currency_decimal_places?: number
   currency_id?: string
   currency_symbol?: string
-  end_date?: string // End date of the budget period queried (ISO 8601)
+  end_date?: string
   name: string
   notes?: null | string
   order?: number
-  spent?: FireflyBudgetSpent[] // Array summarizing spent amounts in different currencies
-  start_date?: string // Start date of the budget period queried (ISO 8601)
-  updated_at?: string // ISO 8601 Date string
+  spent?: FireflyBudgetSpent[]
+  start_date?: string
+  updated_at?: string
 }
 
 interface FireflyBudget {
   attributes: FireflyBudgetAttributes
   id: string
-  type: 'budgets' // Or the relevant type string
+  type: 'budgets'
 }
 
 interface FireflyBudgetsResponse {
   data: FireflyBudget[]
-  // meta?: FireflyMeta; // Optional meta for pagination
-  // links?: FireflyLinks; // Optional links for pagination
 }
 
 export class FireflyFinancialServiceClient implements FinancialServiceClient {
   private baseUrl: string
-  private defaultSourceAccountId: null | string = null // Store the default source account ID
+  private defaultSourceAccountId: null | string = null
   private initialized = false
   private personalAccessToken: string
 
@@ -100,13 +90,13 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
   }
 
   /**
-   * Fetches accounts and sets the default source account ID.
-   * @returns Promise<void>
-   * @throws Error if fetching fails or no default source account is found.
+   * Initializes the client by fetching accounts and identifying the default asset account
+   * designated by the 'defaultAsset' role in Firefly III.
+   * @throws Error if fetching fails or no account with `account_role === 'defaultAsset'` is found.
    */
   async fetchAndSetDefaultAccount(): Promise<void> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/v1/accounts?type=asset`, { // Fetch only asset accounts
+      const response = await fetch(`${this.baseUrl}/api/v1/accounts?type=asset`, {
         headers: {
           'Accept': 'application/json',
           'Authorization': `Bearer ${this.personalAccessToken}`,
@@ -127,17 +117,8 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
       )
 
       if (!defaultAccount) {
-        // Fallback: If no account is explicitly marked as default, maybe use the first asset account?
-        // Or throw an error as it might indicate a configuration issue in Firefly III.
-        // Let's throw an error for now to enforce explicit default account setting.
         console.warn('No default source account (account_role="defaultAsset") found in Firefly III.')
-        // Optional: Use the first asset account as a fallback
-        // if (data.data.length > 0) {
-        //   this.defaultSourceAccountId = data.data[0].id;
-        //   console.log(`Using first asset account found as default: ${data.data[0].attributes.name} (ID: ${this.defaultSourceAccountId})`);
-        // } else {
-        //   throw new Error('No asset accounts found.');
-        // }
+
         throw new Error('Default source account not found. Please configure a default asset account in Firefly III.')
       }
 
@@ -146,53 +127,12 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
     }
     catch (error) {
       console.error('Error fetching or setting default account from Firefly-III:', error)
-      this.defaultSourceAccountId = null // Reset on error
+      this.defaultSourceAccountId = null
       throw new Error(`Failed to get or set default account: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
-  /**
-   * Проверяет соединение с Firefly API и настраивает клиент (включая дефолтный счет)
-   * @returns Promise<boolean> - успешна ли проверка и настройка
-   */
-  async checkConnection(): Promise<boolean> {
-    try {
-      // Проверяем соединение с API путем получения списка категорий
-      await this.getCategories()
-      // Получаем и устанавливаем ID счета по умолчанию
-      await this.fetchAndSetDefaultAccount()
-      this.initialized = true
-
-      return true
-    }
-    catch (error) {
-      console.error('Ошибка соединения или настройки Firefly API клиента:', error)
-      this.initialized = false
-
-      return false
-    }
-  }
-
-  /**
-   * Проверяет, инициализирован ли клиент (включая наличие дефолтного счета)
-   * @throws Error если клиент не инициализирован или нет дефолтного счета
-   */
-  private checkInitialized(): void {
-    if (!this.initialized) {
-      throw new Error('Firefly client not initialized or connection failed')
-    }
-    if (!this.defaultSourceAccountId) {
-      // This check might be redundant if checkConnection throws, but adds safety
-      throw new Error('Firefly client initialized, but default source account ID is missing.')
-    }
-  }
-
-  /**
-   * Получает список категорий из Firefly API
-   * @returns Promise<Category[]> - массив категорий
-   */
   async getCategories(): Promise<Category[]> {
-    // No changes needed here, but ensure headers/fetch logic is consistent
     try {
       const response = await fetch(`${this.baseUrl}/api/v1/categories`, {
         headers: {
@@ -218,15 +158,10 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
     }
     catch (error) {
       console.error('Error getting categories from Firefly-III:', error)
-      // Don't reset initialized status here unless connection is the issue
       throw new Error('Failed to get categories')
     }
   }
 
-  /**
-   * Получает список меток (тегов) из Firefly API
-   * @returns Promise<Tag[]> - массив тегов
-   */
   async getTags(): Promise<Tag[]> {
     try {
       const response = await fetch(`${this.baseUrl}/api/v1/tags`, {
@@ -259,19 +194,18 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
   }
 
   /**
-   * Отправляет одну транзакцию в Firefly API
-   * @param transaction - объект транзакции для отправки
-   * @returns Promise<boolean> - успешна ли отправка
+   * Sends a single transaction. Wraps `sendTransactions`.
    */
   async sendTransaction(transaction: Transaction): Promise<boolean> {
-    // Для обратной совместимости вызываем отправку массива транзакций
     return this.sendTransactions([transaction])
   }
 
   /**
-   * Отправляет несколько транзакций в Firefly API как split-транзакцию
-   * @param transactions - массив транзакций для отправки
-   * @returns Promise<boolean> - успешна ли отправка
+   * Sends one or more transactions to Firefly III.
+   * If multiple transactions are provided, they are sent as a single split transaction.
+   * If only one is provided, it's sent as a standard transaction.
+   * @param transactions - Array of transactions to send.
+   * @returns Promise<boolean> - True if the request was successful (HTTP 2xx), false otherwise.
    */
   async sendTransactions(transactions: Transaction[]): Promise<boolean> {
     if (transactions.length === 0) {
@@ -280,37 +214,29 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
       return false
     }
 
-    // this.checkInitialized() // Ensure client is initialized AND default account ID is set
-
-    // Use the guaranteed non-null ID after checkInitialized()
     const sourceId = this.defaultSourceAccountId!
 
     try {
-      let requestBody: object // Use a generic object type for the body
+      let requestBody: object
 
-      // Преобразуем транзакции в формат Firefly API, добавляя source_id
       const transactionsData = transactions.map((transaction) => {
         const transactionData: any = {
           amount: transaction.amount.toString(),
-          category_name: transaction.category.name, // Using name is fine if Firefly can resolve it
-          // category_id: transaction.category.id, // Alternatively, use ID if available and preferred
-          date: transaction.date.toISOString(), // Use full ISO 8601 date-time string
+          category_name: transaction.category.name,
+          date: transaction.date.toISOString(),
           description: `[BOT] ${transaction.description}`,
-          source_id: sourceId, // Add the default source account ID
+          source_id: sourceId,
           type: 'withdrawal' as const,
         }
 
-        // Add budget_id if provided
         if (transaction.budgetId) {
           transactionData.budget_id = transaction.budgetId
         }
 
-        // Add destination_name if provided
         if (transaction.destination) {
           transactionData.destination_name = transaction.destination
         }
 
-        // Add tags if provided
         if (transaction.tags && transaction.tags.length) {
           transactionData.tags = transaction.tags
         }
@@ -318,7 +244,7 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
         return transactionData
       })
 
-      // Структура запроса остается той же, только payload транзакций изменился
+      // Structure the request body differently for single vs. split transactions
       if (transactions.length === 1) {
         requestBody = {
           transactions: transactionsData,
@@ -326,7 +252,6 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
         console.log('Sending single transaction:', JSON.stringify(requestBody, null, 2))
       }
       else {
-        // Используем свойство groupTitle, если оно доступно у первой транзакции
         const groupTitle = (transactions[0] as any).groupTitle || `[BOT] Split: ${transactions[0]?.description || 'Grouped Transaction'}`
 
         requestBody = {
@@ -364,12 +289,10 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
   }
 
   /**
-   * Получает список лимитов бюджетов из Firefly API
-   * @returns Promise<BudgetLimit[]> - массив лимитов бюджетов
+   * Fetches budget limits for the current calendar month from Firefly III.
+   * @returns Promise<BudgetLimit[]> - Array of budget limits for the current month.
    */
   async getBudgetLimits(): Promise<BudgetLimit[]> {
-    // this.checkInitialized() // Ensure client is initialized
-
     try {
       // Calculate start and end dates for the current month
       const now = new Date()
@@ -382,12 +305,11 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
       const [endDateString] = endOfMonth.toISOString()
         .split('T')
 
-      // Construct the URL with query parameters
       const url = new URL(`${this.baseUrl}/api/v1/budgets`)
       url.searchParams.append('start', startDateString)
       url.searchParams.append('end', endDateString)
 
-      const response = await fetch(url.toString(), { // Use the constructed URL
+      const response = await fetch(url.toString(), {
         headers: {
           'Accept': 'application/json',
           'Authorization': `Bearer ${this.personalAccessToken}`,
@@ -397,41 +319,34 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
       })
 
       if (!response.ok) {
-        // Consider logging the URL that failed:
         console.error(`Firefly API error getting budgets: ${response.status} from ${url.toString()}`)
         const errorBody = await response.text()
         console.error('Error Body:', errorBody)
         throw new Error(`Firefly API error getting budgets: ${response.status}`)
       }
 
-      const data = await response.json() as FireflyBudgetsResponse // Use the new interface
-
-      // Map the response data using the defined interfaces
+      const data = await response.json() as FireflyBudgetsResponse
 
       console.log('Firefly budgets', JSON.stringify(data.data, null, 2))
 
-      return (data.data || []).map((budget: FireflyBudget): BudgetLimit => { // Use FireflyBudget type
-        // Calculate total spent from the 'spent' array if available
+      return (data.data || []).map((budget: FireflyBudget): BudgetLimit => {
+        // Calculate total spent across potentially multiple currencies
         let totalSpent: string | undefined
         if (budget.attributes.spent && Array.isArray(budget.attributes.spent) && budget.attributes.spent.length > 0) {
-          // Sum all 'sum' values from the spent array
           totalSpent = budget.attributes.spent.reduce((sum, currentSpent) => {
-            // Use parseFloat to handle string numbers, default to 0 if sum is undefined or NaN
             const currentSumValue = Number.parseFloat(currentSpent?.sum ?? '0')
 
             return (sum + (Number.isNaN(currentSumValue) ? 0 : currentSumValue))
           }, 0)
-            .toString() // Start reduction with 0 and convert final sum back to string
+            .toString()
         }
         else {
-          // If spent is empty or not present, default spent amount to '0'
           totalSpent = '0'
         }
 
-        // Use attributes defined in FireflyBudgetAttributes
         return {
-          amount: budget.attributes.auto_budget_amount || '0', // Use 'amount' from attributes
-          currencyCode: budget.attributes.currency_code ?? '', // Use currency details from attributes, fallback to empty string
+          amount: budget.attributes.auto_budget_amount || '0',
+          currencyCode: budget.attributes.currency_code ?? '',
           endDate: budget.attributes.end_date ? new Date(budget.attributes.end_date) : endOfMonth,
           id: budget.id,
           name: budget.attributes.name,
