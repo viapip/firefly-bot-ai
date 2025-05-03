@@ -107,7 +107,7 @@ Is everything correct? Confirm to save all, Refine to add details, or Cancel.
 
   public formatSuccessMessage(transactions: Transaction[]): string {
     if (transactions.length === 1) {
-      const transaction = transactions[0]
+      const [transaction] = transactions
 
       return `Transaction successfully sent! 🎉
 Amount: ${transaction.amount}

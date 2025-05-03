@@ -15,8 +15,6 @@ export class FinanceBotFactory {
     const aiService = this.createAIService(config)
     const conversationManager = new MemoryConversationManager()
 
-    console.log('Все сервисы успешно инициализированы')
-
     return new FinanceBot(config, financialService, aiService, conversationManager)
   }
 

@@ -15,4 +15,4 @@ services:
       # File to store the prompt template
       - ./prompt.template:/app/prompt.template
     environment:
-      - NODE_ENV=production 
+      - NODE_ENV=production

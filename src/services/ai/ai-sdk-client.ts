@@ -11,13 +11,26 @@ import type { AIServiceClient } from './interfaces'
 import type { createTransactionSchema } from './schemas'
 
 import { DEFAULT_MODEL, DEFAULT_OPENROUTER_BASE_URL, DEFAULT_REFERER_URL, VARIABLES } from '../../constants'
+import { createLogger } from '../../utils/logger'
 import { createMultipleTransactionsSchema, createSingleTransactionSchema } from './schemas'
 
-// Constants
+const logger = createLogger('AIService')
 
+/**
+ * AI service client implementation using AI SDK
+ */
 export class AISDKClient implements AIServiceClient {
   private openAI: LanguageModelV1
-  // Initialize the OpenAI provider, configuring it for OpenRouter
+
+  /**
+   * Initialize the AI client
+   * @param transactionMinTags - Minimum number of tags required for transactions
+   * @param prompt - System prompt template to use
+   * @param apiKey - API key for the AI service
+   * @param model - Model name to use
+   * @param baseUrl - Base URL for the AI service
+   * @param refererUrl - Referer URL for the API requests
+   */
   constructor(
     private transactionMinTags = 0,
     private prompt: string,
@@ -27,9 +40,14 @@ export class AISDKClient implements AIServiceClient {
     refererUrl = DEFAULT_REFERER_URL,
   ) {
     try {
+      logger.debug('Initializing AI service', {
+        baseUrl,
+        minTags: transactionMinTags,
+        model,
+      })
+
       this.openAI = createOpenAI({
         apiKey,
-
         baseURL: baseUrl,
         compatibility: 'strict',
         headers: {
@@ -38,11 +56,13 @@ export class AISDKClient implements AIServiceClient {
       })(model, {
         parallelToolCalls: false,
         reasoningEffort: 'medium',
-      }) // Pass the specific model to use
+      })
+
+      logger.info('AI service initialized successfully')
     }
     catch (error) {
-      console.error('Error initializing AI service:', error)
-      throw error
+      logger.error('Error initializing AI service:', error)
+      throw new Error(`Failed to initialize AI service: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
@@ -51,7 +71,15 @@ export class AISDKClient implements AIServiceClient {
    */
   private parseTransactionDate(dateString: string): Date {
     // Replace space with 'T' for ISO 8601 format compatibility
-    return new Date(dateString.replace(' ', 'T'))
+    try {
+      return new Date(dateString.replace(' ', 'T'))
+    }
+    catch (error) {
+      logger.error(`Error parsing transaction date "${dateString}":`, error)
+      // Return current date as fallback
+
+      return new Date()
+    }
   }
 
   /**
@@ -63,6 +91,10 @@ export class AISDKClient implements AIServiceClient {
     })
 
     // Return found category or the first available category, or a default 'unknown' category
+    if (!category) {
+      logger.warn(`Category with ID "${categoryId}" not found, using fallback`)
+    }
+
     return category || (categories.length > 0 ? categories[0] : { id: 'unknown', name: 'Unknown' })
   }
 
@@ -94,7 +126,7 @@ export class AISDKClient implements AIServiceClient {
 
     // Validate tag count and warn if incorrect
     if (!this.validateTagCount(transData.tags)) {
-      console.warn(`Invalid tag set: Received ${transData.tags?.length || 0} tags, but require at least ${this.transactionMinTags}.`)
+      logger.warn(`Invalid tag set: Received ${transData.tags?.length || 0} tags, but require at least ${this.transactionMinTags}`)
     }
 
     // Find budget details if budgetId is provided
@@ -102,21 +134,26 @@ export class AISDKClient implements AIServiceClient {
       const budget = budgetLimits.find((limit) => {
         return limit.id === transData.budgetId
       })
+
       if (budget) {
         budgetName = budget.name
         const limitAmount = Number.parseFloat(budget.amount)
         // spentAmount is typically negative, so adding it subtracts the spent amount
         const spentAmount = Number.parseFloat(budget.spent ?? '0')
+
         // Ensure calculation results in a number
         if (!Number.isNaN(limitAmount) && !Number.isNaN(spentAmount)) {
           budgetRemaining = limitAmount + spentAmount
         }
         else {
-          console.warn(`Could not calculate budget remaining for budget ${budgetName} (ID: ${transData.budgetId}). Limit: ${budget.amount}, Spent: ${budget.spent}`)
+          logger.warn(`Could not calculate budget remaining for budget ${budgetName} (ID: ${transData.budgetId})`, {
+            limitAmount: budget.amount,
+            spentAmount: budget.spent,
+          })
         }
       }
       else {
-        console.warn(`Budget ID ${transData.budgetId} provided but not found in budgetLimits.`)
+        logger.warn(`Budget ID ${transData.budgetId} provided but not found in budgetLimits`)
       }
     }
 
@@ -145,6 +182,11 @@ export class AISDKClient implements AIServiceClient {
     tags: Tag[] = [],
     budgetLimits: BudgetLimit[] = [],
   ): Promise<CoreMessage[]> {
+    logger.debug('Preparing AI messages', {
+      imageCount: imageBuffers.length,
+      messageCount: messages.length,
+    })
+
     // Format budget limits information for the AI prompt
     const budgetInfo = budgetLimits.length > 0
       ? budgetLimits
@@ -172,7 +214,7 @@ export class AISDKClient implements AIServiceClient {
         .join('\n')}`
       : 'No predefined tags available.'
 
-    // Read the prompt template from the project root
+    // Get current date for the prompt
     const [currentDate] = new Date()
       .toISOString()
       .split('T')
@@ -192,6 +234,7 @@ export class AISDKClient implements AIServiceClient {
       systemPromptTemplate = systemPromptTemplate.replaceAll(placeholder, value)
     }
 
+    // Add user comments handling instructions
     systemPromptTemplate = `${systemPromptTemplate}\n\n
     
     ##  USER COMMENTS HANDLING SYSTEM
@@ -226,7 +269,7 @@ export class AISDKClient implements AIServiceClient {
     // Initialize AI messages with the system prompt
     const aiMessages: CoreMessage[] = [{ content: systemPromptTemplate, role: 'system' }]
 
-    console.log('AI messages', JSON.stringify(aiMessages, null, 2)) // Kept for debugging if needed
+    logger.debug('System prompt prepared')
 
     // Convert image buffers to base64 data URLs
     const dataUrls = imageBuffers.map((buffer) => {
@@ -279,9 +322,11 @@ export class AISDKClient implements AIServiceClient {
         aiMessages.push({
           content: msg.content,
           role: 'user',
-        } as CoreUserMessage) // Type assertion might be needed depending on CoreMessage definition
+        } as CoreUserMessage)
       }
     }
+
+    logger.debug(`AI message preparation complete: ${aiMessages.length} messages`)
 
     return aiMessages
   }
@@ -302,12 +347,15 @@ export class AISDKClient implements AIServiceClient {
     tags: Tag[] = [],
     budgetLimits: BudgetLimit[] = [],
   ): Promise<Transaction | Transaction[]> {
-    // Ensure the service is initialized (currently commented out)
-    // await this.ensureInitialized()
+    logger.info('Processing receipt and comments', {
+      imageCount: imageBuffers.length,
+      messageCount: messages.length,
+    })
 
     try {
       if (!this.prompt) {
-        throw new Error('Prompt is not set')
+        logger.error('Prompt is not set')
+        throw new Error('AI service prompt is not set')
       }
 
       // Prepare messages for the AI model
@@ -315,6 +363,8 @@ export class AISDKClient implements AIServiceClient {
 
       // Create schema with the defined minimum tag count
       const multipleTransactionsSchema = createMultipleTransactionsSchema(this.transactionMinTags)
+
+      logger.debug('Sending request to AI model')
 
       // Request transaction data from the AI model using the multiple transactions schema
       const { object: resultData } = await generateObject({
@@ -326,7 +376,7 @@ export class AISDKClient implements AIServiceClient {
         temperature: 0.4, // Low temperature for more deterministic output
       })
 
-      // console.log('AI result data:', JSON.stringify(resultData, null, 2)); // Kept for debugging
+      logger.debug('Received AI model response')
 
       // Type assertion for resultData
       const typedResultData = resultData as z.infer<ReturnType<typeof createMultipleTransactionsSchema>>
@@ -338,10 +388,11 @@ export class AISDKClient implements AIServiceClient {
       if (typedResultData.requiresSplit && typedResultData.transactions.length > 0) {
         // Create an array of transactions if splitting is needed
         const groupTitle = typedResultData.groupTitle
-          || `Split: ${typedResultData.transactions[0]?.description || 'Grouped Transaction'}` // Default group title
+          || `Split: ${typedResultData.transactions[0]?.description || 'Grouped Transaction'}`
+
+        logger.info(`Creating split transaction with ${typedResultData.transactions.length} items`)
 
         const transactions: Transaction[] = typedResultData.transactions.map((transData) => {
-          // Pass budgetLimits to createTransaction
           return this.createTransaction(transData, transactionDate, categories, budgetLimits, groupTitle)
         })
 
@@ -350,16 +401,24 @@ export class AISDKClient implements AIServiceClient {
 
       // If no splitting is required but transactions exist, create a single transaction from the first item
       if (typedResultData.transactions.length > 0) {
-        // Pass budgetLimits to createTransaction
-        return this.createTransaction(typedResultData.transactions[0], transactionDate, categories, budgetLimits)
+        logger.info('Creating single transaction from schema')
+
+        return this.createTransaction(
+          typedResultData.transactions[0],
+          transactionDate,
+          categories,
+          budgetLimits,
+        )
       }
 
       // Fallback: If the multiple transaction schema returns an empty transactions array,
       // try generating a single transaction using the basic transaction schema.
-      console.warn('Multiple transactions schema returned empty array, attempting single transaction extraction.')
+      logger.warn('Multiple transactions schema returned empty array, attempting single transaction extraction')
 
       // Create single transaction schema
       const singleTransactionSchema = createSingleTransactionSchema(this.transactionMinTags)
+
+      logger.debug('Sending fallback request to AI model with single transaction schema')
 
       const { object: extractedData } = await generateObject({
         messages: aiMessages,
@@ -373,6 +432,8 @@ export class AISDKClient implements AIServiceClient {
 
       const singleTransactionDate = this.parseTransactionDate(typedExtractedData.date)
 
+      logger.info('Created single transaction using fallback schema')
+
       // Create a single transaction using the fallback data
       return this.createTransaction(
         { // Map extracted data to the input schema format
@@ -385,13 +446,16 @@ export class AISDKClient implements AIServiceClient {
         },
         singleTransactionDate,
         categories,
-        budgetLimits, // Pass budgetLimits
+        budgetLimits,
       )
     }
     catch (error) {
       // Log and re-throw the error with a user-friendly message
-      console.error('Error processing receipt and comments via AI SDK:', error)
-      throw new Error(`Failed to process receipt or comments: ${error instanceof Error ? error.message : String(error)}`)
+      logger.error('Error processing receipt and comments via AI SDK:', error)
+      const errorMessage = error instanceof Error ? error.message : String(error)
+
+      // Forward the detailed error message to the user
+      throw new Error(`AI API: ${errorMessage}`)
     }
   }
 }

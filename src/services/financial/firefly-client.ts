@@ -1,6 +1,10 @@
 import type { BudgetLimit, Category, Tag, Transaction } from '../../domain/types'
 import type { FinancialServiceClient } from './interfaces'
 
+import { createLogger } from '../../utils/logger'
+
+const logger = createLogger('FireflyClient')
+
 interface FireflyCategory {
   attributes: {
     name: string
@@ -78,15 +82,46 @@ interface FireflyBudgetsResponse {
   data: FireflyBudget[]
 }
 
+/**
+ * Client for interacting with the Firefly III API
+ */
 export class FireflyFinancialServiceClient implements FinancialServiceClient {
   private baseUrl: string
   private defaultSourceAccountId: null | string = null
-  private initialized = false
   private personalAccessToken: string
 
   constructor(baseUrl: string, personalAccessToken: string) {
     this.baseUrl = baseUrl
     this.personalAccessToken = personalAccessToken
+    logger.debug('FireflyFinancialServiceClient initialized')
+  }
+
+  /**
+   * Creates standard headers for Firefly API requests
+   */
+  private getHeaders(): HeadersInit {
+    return {
+      'Accept': 'application/json',
+      'Authorization': `Bearer ${this.personalAccessToken}`,
+      'Content-Type': 'application/json',
+    }
+  }
+
+  /**
+   * Handles API errors uniformly
+   */
+  private async handleApiError(response: Response, operation: string): Promise<never> {
+    let errorDetails = ''
+    try {
+      errorDetails = await response.text()
+    }
+    catch (textError) {
+      logger.error(`Failed to get error details for ${operation}:`, textError)
+    }
+
+    const errorMessage = `Firefly API error ${operation}: ${response.status} - ${response.statusText}`
+    logger.error(errorMessage, { details: errorDetails })
+    throw new Error(`${errorMessage}${errorDetails ? `: ${errorDetails}` : ''}`)
   }
 
   /**
@@ -95,18 +130,15 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
    * @throws Error if fetching fails or no account with `account_role === 'defaultAsset'` is found.
    */
   async fetchAndSetDefaultAccount(): Promise<void> {
+    logger.debug('Fetching default account')
     try {
       const response = await fetch(`${this.baseUrl}/api/v1/accounts?type=asset`, {
-        headers: {
-          'Accept': 'application/json',
-          'Authorization': `Bearer ${this.personalAccessToken}`,
-          'Content-Type': 'application/json',
-        },
+        headers: this.getHeaders(),
         method: 'GET',
       })
 
       if (!response.ok) {
-        throw new Error(`Firefly API error fetching accounts: ${response.status}`)
+        await this.handleApiError(response, 'fetching accounts')
       }
 
       const data = await response.json() as FireflyAccountsResponse
@@ -117,37 +149,37 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
       )
 
       if (!defaultAccount) {
-        console.warn('No default source account (account_role="defaultAsset") found in Firefly III.')
-
+        logger.warn('No default source account (account_role="defaultAsset") found in Firefly III.')
         throw new Error('Default source account not found. Please configure a default asset account in Firefly III.')
       }
 
       this.defaultSourceAccountId = defaultAccount.id
-      console.log(`Default source account set: ${defaultAccount.attributes.name} (ID: ${this.defaultSourceAccountId})`)
+      logger.info(`Default source account set: ${defaultAccount.attributes.name} (ID: ${this.defaultSourceAccountId})`)
     }
     catch (error) {
-      console.error('Error fetching or setting default account from Firefly-III:', error)
+      logger.error('Error fetching or setting default account from Firefly-III:', error)
       this.defaultSourceAccountId = null
       throw new Error(`Failed to get or set default account: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
+  /**
+   * Fetches all categories from Firefly III
+   */
   async getCategories(): Promise<Category[]> {
+    logger.debug('Fetching categories')
     try {
       const response = await fetch(`${this.baseUrl}/api/v1/categories`, {
-        headers: {
-          'Accept': 'application/json',
-          'Authorization': `Bearer ${this.personalAccessToken}`,
-          'Content-Type': 'application/json',
-        },
+        headers: this.getHeaders(),
         method: 'GET',
       })
 
       if (!response.ok) {
-        throw new Error(`Firefly API error getting categories: ${response.status}`)
+        await this.handleApiError(response, 'getting categories')
       }
 
       const data = await response.json() as FireflyCategoriesResponse
+      logger.debug(`Retrieved ${data.data.length} categories`)
 
       return data.data.map((category: FireflyCategory) => {
         return {
@@ -157,27 +189,28 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
       })
     }
     catch (error) {
-      console.error('Error getting categories from Firefly-III:', error)
-      throw new Error('Failed to get categories')
+      logger.error('Error getting categories from Firefly-III:', error)
+      throw new Error(`Failed to get categories: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
+  /**
+   * Fetches all tags from Firefly III
+   */
   async getTags(): Promise<Tag[]> {
+    logger.debug('Fetching tags')
     try {
       const response = await fetch(`${this.baseUrl}/api/v1/tags`, {
-        headers: {
-          'Accept': 'application/json',
-          'Authorization': `Bearer ${this.personalAccessToken}`,
-          'Content-Type': 'application/json',
-        },
+        headers: this.getHeaders(),
         method: 'GET',
       })
 
       if (!response.ok) {
-        throw new Error(`Firefly API error getting tags: ${response.status}`)
+        await this.handleApiError(response, 'getting tags')
       }
 
       const json = await response.json() as FireflyTagsResponse
+      logger.debug(`Retrieved ${json.data.length} tags`)
 
       return json.data.map((tag: FireflyTag) => {
         return {
@@ -188,8 +221,8 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
       })
     }
     catch (error) {
-      console.error('Error getting tags from Firefly-III:', error)
-      throw new Error('Failed to get tags')
+      logger.error('Error getting tags from Firefly-III:', error)
+      throw new Error(`Failed to get tags: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
@@ -208,19 +241,23 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
    * @returns Promise<boolean> - True if the request was successful (HTTP 2xx), false otherwise.
    */
   async sendTransactions(transactions: Transaction[]): Promise<boolean> {
-    if (transactions.length === 0) {
-      console.error('No transactions to send')
+    if (!transactions.length) {
+      logger.error('No transactions to send')
 
       return false
     }
 
-    const sourceId = this.defaultSourceAccountId!
+    if (!this.defaultSourceAccountId) {
+      logger.error('Cannot send transactions: default source account ID not set')
+
+      return false
+    }
+
+    const sourceId = this.defaultSourceAccountId
 
     try {
-      let requestBody: object
-
       const transactionsData = transactions.map((transaction) => {
-        const transactionData: any = {
+        const transactionData: Record<string, any> = {
           amount: transaction.amount.toString(),
           category_name: transaction.category.name,
           date: transaction.date.toISOString(),
@@ -245,44 +282,48 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
       })
 
       // Structure the request body differently for single vs. split transactions
+      let requestBody: Record<string, any>
       if (transactions.length === 1) {
         requestBody = {
           transactions: transactionsData,
         }
-        console.log('Sending single transaction:', JSON.stringify(requestBody, null, 2))
+        logger.info('Sending single transaction')
+        logger.debug('Transaction data:', requestBody)
       }
       else {
-        const groupTitle = (transactions[0] as any).groupTitle || `[BOT] Split: ${transactions[0]?.description || 'Grouped Transaction'}`
+        const groupTitle = (transactions[0] as any).groupTitle
+          || `[BOT] Split: ${transactions[0]?.description || 'Grouped Transaction'}`
 
         requestBody = {
           group_title: groupTitle,
           transactions: transactionsData,
         }
-        console.log('Sending split transaction:', JSON.stringify(requestBody, null, 2))
+        logger.info(`Sending split transaction with ${transactions.length} items`)
+        logger.debug('Split transaction data:', requestBody)
       }
 
       const response = await fetch(`${this.baseUrl}/api/v1/transactions`, {
         body: JSON.stringify(requestBody),
-        headers: {
-          'Accept': 'application/json',
-          'Authorization': `Bearer ${this.personalAccessToken}`,
-          'Content-Type': 'application/json',
-        },
+        headers: this.getHeaders(),
         method: 'POST',
       })
 
       if (!response.ok) {
         const errorData = await response.text()
-        console.error(`Firefly API error: ${response.status} ${errorData}`)
-        console.error('Failed request body:', JSON.stringify(requestBody, null, 2))
+        logger.error(`Firefly API error: ${response.status}`, {
+          errorData,
+          requestBody: JSON.stringify(requestBody),
+        })
 
         return false
       }
 
+      logger.info(`Successfully sent ${transactions.length} transaction(s)`)
+
       return true
     }
     catch (error) {
-      console.error('Error sending transactions to Firefly-III:', error)
+      logger.error('Error sending transactions to Firefly-III:', error)
 
       return false
     }
@@ -293,6 +334,7 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
    * @returns Promise<BudgetLimit[]> - Array of budget limits for the current month.
    */
   async getBudgetLimits(): Promise<BudgetLimit[]> {
+    logger.debug('Fetching budget limits')
     try {
       // Calculate start and end dates for the current month
       const now = new Date()
@@ -309,25 +351,19 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
       url.searchParams.append('start', startDateString)
       url.searchParams.append('end', endDateString)
 
+      logger.debug(`Fetching budgets from ${startDateString} to ${endDateString}`)
+
       const response = await fetch(url.toString(), {
-        headers: {
-          'Accept': 'application/json',
-          'Authorization': `Bearer ${this.personalAccessToken}`,
-          'Content-Type': 'application/json',
-        },
+        headers: this.getHeaders(),
         method: 'GET',
       })
 
       if (!response.ok) {
-        console.error(`Firefly API error getting budgets: ${response.status} from ${url.toString()}`)
-        const errorBody = await response.text()
-        console.error('Error Body:', errorBody)
-        throw new Error(`Firefly API error getting budgets: ${response.status}`)
+        await this.handleApiError(response, 'getting budgets')
       }
 
       const data = await response.json() as FireflyBudgetsResponse
-
-      console.log('Firefly budgets', JSON.stringify(data.data, null, 2))
+      logger.debug(`Retrieved ${data.data?.length || 0} budget limits`)
 
       return (data.data || []).map((budget: FireflyBudget): BudgetLimit => {
         // Calculate total spent across potentially multiple currencies
@@ -356,7 +392,7 @@ export class FireflyFinancialServiceClient implements FinancialServiceClient {
       })
     }
     catch (error) {
-      console.error('Error getting budgets from Firefly-III:', error)
+      logger.error('Error getting budgets from Firefly-III:', error)
       throw new Error(`Failed to get budgets: ${error instanceof Error ? error.message : String(error)}`)
     }
   }

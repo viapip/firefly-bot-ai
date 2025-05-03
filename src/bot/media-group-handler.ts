@@ -5,6 +5,8 @@ import type { Message, Update } from 'telegraf/types'
 
 import type { ConversationManager } from '../services/conversation/interfaces'
 
+import { logger } from '../utils'
+
 // Constants
 const MEDIA_GROUP_TIMEOUT_MS = 500
 const STATUS_MAP = {
@@ -80,7 +82,7 @@ export class MediaGroupHandler {
   public cancelPendingMediaGroupForUser(userId: string): void {
     for (const [id, group] of this.pendingMediaGroups.entries()) {
       if (group.userId === userId) {
-        console.log(`Cancelling pending media group ${id} for user ${userId}`)
+        logger.log(`Cancelling pending media group ${id} for user ${userId}`)
         clearTimeout(group.timerId)
         this.pendingMediaGroups.delete(id)
         break // Assume only one pending group per user at a time
@@ -105,7 +107,7 @@ export class MediaGroupHandler {
     const { ctx, photos, userId } = group // Use stored context for replying
     this.pendingMediaGroups.delete(mediaGroupId) // Remove from pending
 
-    console.log(`Finalizing media group ${mediaGroupId} for user ${userId} with ${photos.length} photos.`)
+    logger.log(`Finalizing media group ${mediaGroupId} for user ${userId} with ${photos.length} photos.`)
 
     const conversation = this.conversationManager.getOrCreateConversation(userId)
     const isFirstEvent = conversation.status === STATUS_MAP.IDLE

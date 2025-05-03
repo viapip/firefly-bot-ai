@@ -6,25 +6,38 @@ import type { BotConfig } from './config/types'
 
 import { FinanceBotFactory } from './bot/factory'
 import { loadPromptTemplate } from './utils'
+import { logger } from './utils/logger'
 
-// Загружаем переменные окружения
+// Load environment variables
 dotenv.config()
 
-// Функция для запуска бота
+// Set log level based on debug flag
+if (process.env.DEBUG === 'true') {
+  process.env.LOG_LEVEL = 'debug'
+}
+
+/**
+ * Main function to start the bot
+ */
 async function startBot() {
-  // Загрузка конфигурации из переменных окружения
+  logger.info('Starting Firefly Finance Bot')
+
+  // Load configuration from environment variables
   const config: BotConfig = {
     telegramToken: process.env.TELEGRAM_TOKEN || '',
 
-    // Конфигурация Firefly-III (если есть)
+    // Firefly III configuration (if present)
     fireflyConfig: process.env.FIREFLY_API_URL
       ? {
           accessToken: process.env.FIREFLY_ACCESS_TOKEN || '',
           baseUrl: process.env.FIREFLY_API_URL,
+          transactionMinTags: process.env.FIREFLY_MIN_TAGS
+            ? Number.parseInt(process.env.FIREFLY_MIN_TAGS, 10)
+            : undefined,
         }
       : undefined,
 
-    // Конфигурация OpenRouter (если есть)
+    // OpenRouter configuration (if present)
     openRouterConfig: process.env.OPENROUTER_API_KEY
       ? {
           apiKey: process.env.OPENROUTER_API_KEY,
@@ -36,51 +49,63 @@ async function startBot() {
       : undefined,
 
     adminIds: process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',') : [],
-    // Другие настройки
+    // Other settings
     debug: process.env.DEBUG === 'true',
   }
 
-  // Проверка обязательных параметров
+  logger.debug('Configuration loaded', {
+    debug: config.debug,
+    hasFireflyConfig: Boolean(config.fireflyConfig),
+    hasOpenRouterConfig: Boolean(config.openRouterConfig),
+  })
+
+  // Validate required parameters
   if (!config.telegramToken) {
-    console.error('Ошибка: Не указан токен Telegram бота')
+    logger.fatal('Error: Telegram bot token is not provided')
     process.exit(1)
   }
 
-  // Проверка наличия конфигурации для AI и финансового сервисов
+  // Validate AI service configuration
   if (!config.openRouterConfig || !config.openRouterConfig.apiKey) {
-    console.error('Ошибка: Не указаны параметры для AI сервиса (OpenRouter)')
+    logger.fatal('Error: AI service parameters (OpenRouter) are not provided')
     process.exit(1)
   }
 
+  // Validate financial service configuration
   if (
     !config.fireflyConfig
     || !config.fireflyConfig.baseUrl
     || !config.fireflyConfig.accessToken
   ) {
-    console.error(
-      'Ошибка: Не указаны параметры для финансового сервиса (Firefly)',
-    )
+    logger.fatal('Error: Financial service parameters (Firefly) are not provided')
     process.exit(1)
   }
 
-  // Определение корня проекта и загрузка шаблона промпта
+  // Load prompt template
   const projectRoot = path.resolve(process.cwd())
-  const promptTemplate
-    = loadPromptTemplate(projectRoot) || config.openRouterConfig.prompt || ''
+  const promptTemplate = loadPromptTemplate(projectRoot) || config.openRouterConfig.prompt || ''
+
+  if (!promptTemplate) {
+    logger.warn('No prompt template found, using empty prompt')
+  }
+  else {
+    logger.debug('Prompt template loaded')
+  }
 
   config.openRouterConfig.prompt = promptTemplate
 
-  // Создание и запуск бота
+  // Create and start bot
   try {
-    console.log('Создание бота и проверка сервисов...')
+    logger.info('Creating bot and checking services...')
 
     const bot = await FinanceBotFactory.createBot(config)
     bot.start()
 
-    console.log('Бот успешно запущен')
+    logger.info('Bot successfully started')
 
-    // Обработка остановки процесса
+    // Handle process termination
     const handleExit = () => {
+      logger.info('Received termination signal, stopping bot')
       bot.stop()
       process.exit(0)
     }
@@ -89,11 +114,14 @@ async function startBot() {
     process.on('SIGTERM', handleExit)
   }
   catch (error) {
-    console.error('Ошибка запуска бота:', error)
+    logger.fatal('Error starting the bot:', error)
     process.exit(1)
   }
 }
 
-// Запуск бота
+// Start the bot
 startBot()
-  .catch(console.error)
+  .catch((error) => {
+    logger.fatal('Unhandled error during bot startup:', error)
+    process.exit(1)
+  })

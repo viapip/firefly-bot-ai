@@ -1,19 +1,24 @@
-// services/conversation/memory-conversation.ts
 import type { Buffer } from 'node:buffer'
 
 import type { Transaction } from '../../domain/types'
 import type { ConversationManager, ConversationMessage, ConversationState } from './interfaces'
+
+import { ConversationStatus } from '../../constants/types'
+import { createLogger } from '../../utils/logger'
+
+const logger = createLogger('ConversationManager')
 
 export class MemoryConversationManager implements ConversationManager {
   private conversations = new Map<string, ConversationState>()
 
   getOrCreateConversation(userId: string): ConversationState {
     if (!this.conversations.has(userId)) {
+      logger.debug(`Creating new conversation for user ${userId}`)
       this.conversations.set(userId, {
         lastUpdated: new Date(),
         messages: [],
         processingAttempts: 0,
-        status: 'idle',
+        status: ConversationStatus.IDLE,
         userId,
       })
     }
@@ -21,67 +26,55 @@ export class MemoryConversationManager implements ConversationManager {
     return this.conversations.get(userId)!
   }
 
-  /**
-   * Сбрасывает состояние диалога, с опцией сохранения текущего изображения
-   */
   resetConversation(userId: string, keepImage = false): void {
     const oldConversation = this.conversations.get(userId)
-    // Сохраняем текущие изображения, если указан флаг keepImage
-    // Если нужно сохранить изображения, берем их из старого состояния
-    // В противном случае создаем пустой массив для новых изображений
     const currentImages = keepImage && oldConversation && oldConversation.currentImages
       ? [...oldConversation.currentImages]
       : []
 
+    logger.debug(`Resetting conversation for user ${userId}`, { keepImage })
+
     this.conversations.set(userId, {
-      currentImages, // Всегда инициализируем массив изображений
+      currentImages,
       lastUpdated: new Date(),
       messages: [],
       processingAttempts: 0,
-      status: 'idle',
+      status: ConversationStatus.IDLE,
       userId,
     })
   }
 
-  /**
-   * Сохраняет изображение, сохраняя текущий контекст (историю сообщений)
-   */
   saveImageKeepContext(userId: string, image: Buffer): void {
     const conversation = this.getOrCreateConversation(userId)
-    // Инициализируем массив изображений, если его еще нет
     if (!conversation.currentImages) {
       conversation.currentImages = []
     }
     conversation.currentImages.push(image)
     conversation.lastUpdated = new Date()
-    // Не сбрасываем сообщения или другие данные контекста
+
+    logger.debug(`Saved image for user ${userId}, keeping context`, {
+      imageCount: conversation.currentImages.length,
+    })
   }
 
-  /**
-   * Очищает текущие транзакции, сохраняя изображение и контекст
-   */
   clearTransactionsKeepContext(userId: string): void {
     const conversation = this.getOrCreateConversation(userId)
     conversation.currentTransactions = undefined
     conversation.lastUpdated = new Date()
+
+    logger.debug(`Cleared transactions for user ${userId}, keeping context`)
   }
 
-  /**
-   * Метод для обратной совместимости
-   * @deprecated Используйте clearTransactionsKeepContext
-   */
   clearTransactionKeepContext(userId: string): void {
     this.clearTransactionsKeepContext(userId)
   }
 
-  /**
-   * Переводит диалог из состояния ожидания подтверждения в режим уточнения
-   */
   transitionToRefinement(userId: string): void {
     const conversation = this.getOrCreateConversation(userId)
 
-    if (conversation.status === 'awaiting_confirmation') {
-      conversation.status = 'awaiting_comment'
+    if (conversation.status === ConversationStatus.AWAITING_CONFIRMATION) {
+      logger.debug(`Transitioning conversation to refinement for user ${userId}`)
+      conversation.status = ConversationStatus.AWAITING_COMMENT
       conversation.lastUpdated = new Date()
     }
   }
@@ -92,12 +85,13 @@ export class MemoryConversationManager implements ConversationManager {
     conversation.messages.push({
       content,
       hasImage,
-      imageIndex, // Сохраняем индекс изображения, если оно есть
+      imageIndex,
       role: 'user',
       timestamp: new Date(),
     })
 
     conversation.lastUpdated = new Date()
+    logger.debug(`Added user message for ${userId}`, { hasImage, imageIndex })
   }
 
   addAssistantMessage(userId: string, content: string): void {
@@ -110,36 +104,43 @@ export class MemoryConversationManager implements ConversationManager {
     })
 
     conversation.lastUpdated = new Date()
+    logger.debug(`Added assistant message for ${userId}`)
   }
 
   updateStatus(userId: string, status: ConversationState['status']): void {
     const conversation = this.getOrCreateConversation(userId)
+    const oldStatus = conversation.status
     conversation.status = status
     conversation.lastUpdated = new Date()
+
+    logger.debug(`Updated status for user ${userId}`, {
+      from: oldStatus,
+      to: status,
+    })
   }
 
   saveImage(userId: string, image: Buffer): void {
     const conversation = this.getOrCreateConversation(userId)
-    // Инициализируем массив изображений, если его еще нет
     if (!conversation.currentImages) {
       conversation.currentImages = []
     }
     conversation.currentImages.push(image)
     conversation.lastUpdated = new Date()
+
+    logger.debug(`Saved image for user ${userId}`, {
+      imageCount: conversation.currentImages.length,
+    })
   }
 
   saveTransactions(userId: string, transactions: Transaction | Transaction[]): void {
     const conversation = this.getOrCreateConversation(userId)
-    // Преобразуем в массив, если пришла одна транзакция
     const transactionsArray = Array.isArray(transactions) ? transactions : [transactions]
     conversation.currentTransactions = transactionsArray
     conversation.lastUpdated = new Date()
+
+    logger.debug(`Saved ${transactionsArray.length} transactions for user ${userId}`)
   }
 
-  /**
-   * Сохраняет одиночную транзакцию (метод для обратной совместимости)
-   * В новом коде следует использовать saveTransactions
-   */
   saveTransaction(userId: string, transaction: Transaction): void {
     this.saveTransactions(userId, [transaction])
   }
@@ -154,57 +155,66 @@ export class MemoryConversationManager implements ConversationManager {
     const conversation = this.getOrCreateConversation(userId)
     conversation.processingAttempts += 1
 
+    logger.debug(`Incremented processing attempts for user ${userId}`, {
+      count: conversation.processingAttempts,
+    })
+
     return conversation.processingAttempts
   }
 
   cleanupOldConversations(maxAgeHours = 24): void {
     const now = new Date()
+    let cleanedCount = 0
+
     for (const [userId, conversation] of this.conversations.entries()) {
       const ageHours = (now.getTime() - conversation.lastUpdated.getTime()) / (1000 * 60 * 60)
       if (ageHours > maxAgeHours) {
         this.conversations.delete(userId)
+        cleanedCount++
       }
+    }
+
+    if (cleanedCount > 0) {
+      logger.info(`Cleaned up ${cleanedCount} old conversations`, {
+        maxAgeHours,
+        remainingCount: this.conversations.size,
+      })
     }
   }
 
   getCurrentImageForProcessing(userId: string, imageIndex = 0): Buffer | undefined {
     const conversation = this.getOrCreateConversation(userId)
-    // Возвращаем изображение по указанному индексу или первое, если индекс не указан
-    // Если индекс выходит за пределы массива или массив пуст, возвращаем undefined
     if (!conversation.currentImages || conversation.currentImages.length === 0) {
       return undefined
     }
 
-    // Проверяем, что индекс в пределах массива
     return imageIndex < conversation.currentImages.length
       ? conversation.currentImages[imageIndex]
-      : conversation.currentImages[0] // Если индекс некорректный, возвращаем первое изображение
+      : conversation.currentImages[0]
   }
 
-  /**
-   * Очищает старые изображения, оставляя только указанное количество последних
-   */
   clearOldImages(userId: string, keepCount = 1): void {
     const conversation = this.getOrCreateConversation(userId)
 
     if (conversation.currentImages && conversation.currentImages.length > keepCount) {
-      // Оставляем только последние keepCount изображений
+      const oldCount = conversation.currentImages.length
       conversation.currentImages = conversation.currentImages.slice(-keepCount)
+
+      logger.debug(`Cleared old images for user ${userId}`, {
+        kept: conversation.currentImages.length,
+        removed: oldCount - conversation.currentImages.length,
+      })
     }
   }
 
-  /**
-   * Сохраняет сообщение об ошибке в состоянии диалога
-   */
   setLastError(userId: string, errorMessage: string): void {
     const conversation = this.getOrCreateConversation(userId)
     conversation.lastError = errorMessage
     conversation.lastUpdated = new Date()
+
+    logger.debug(`Set error for user ${userId}`, { errorMessage })
   }
 
-  /**
-   * Возвращает последнее сообщение об ошибке
-   */
   getLastError(userId: string): string | undefined {
     const conversation = this.getOrCreateConversation(userId)
 

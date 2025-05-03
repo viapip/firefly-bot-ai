@@ -1,4 +1,3 @@
-// bot/finance-bot.ts
 import type { CallbackQuery } from '@telegraf/types'
 import type { Context, NarrowedContext } from 'telegraf'
 import type { Message, Update } from 'telegraf/types'
@@ -14,9 +13,12 @@ import type { ConversationManager } from '../services/conversation/interfaces'
 import type { FinancialServiceClient } from '../services/financial/interfaces'
 
 import { CALLBACK_DATA_CANCEL, CALLBACK_DATA_CONFIRM, CALLBACK_DATA_NEXT, CALLBACK_DATA_REFINE, CALLBACK_DATA_RETRY, COMMAND_NEXT, CONVERSATION_CLEANUP_INTERVAL_MS, MAX_PROCESSING_ATTEMPTS, STATUS_MAP } from '../constants'
+import { createLogger } from '../utils/logger'
 import { MediaGroupHandler } from './media-group-handler'
 import { ReceiptProcessor } from './receipt-processor'
 import { UIFormatter } from './ui-formatter'
+
+const logger = createLogger('FinanceBot')
 
 // Type for callback handler functions
 type CallbackHandler = (ctx: Context, userId: string, query: CallbackQuery.DataQuery) => Promise<void>
@@ -98,13 +100,11 @@ export class FinanceBot {
   // Start the bot
   public start(): void {
     this.bot.launch()
-    console.log('Bot started')
   }
 
   // Stop the bot
   public stop(): void {
     this.bot.stop()
-    console.log('Bot stopped')
   }
 
   // Helper methods
@@ -301,37 +301,103 @@ export class FinanceBot {
     ctx: Context,
     userId: string,
   ): Promise<Transaction[]> {
-    // Get categories, tags, and budget limits for AI processing
-    const [
-      categories,
-      tags,
-      budgetLimits,
-    ] = await Promise.all([
-      this.financialService.getCategories(),
-      this.financialService.getTags(),
-      this.financialService.getBudgetLimits(),
-      this.financialService.fetchAndSetDefaultAccount(),
-    ])
+    logger.info(`Processing text transaction for user ${userId}`)
 
-    // Get conversation messages for context
-    const messages = this.conversationManager.getMessagesForAI(userId)
+    try {
+      // Get categories, tags, and budget limits for AI processing
+      const [
+        categories,
+        tags,
+        budgetLimits,
+      ] = await this.fetchFinancialData(userId)
 
-    // Process the text using AI service
-    const aiResult = await this.aiService.processReceiptAndComments(
-      [], // No images for text-based transactions
-      messages,
-      categories,
-      tags,
-      budgetLimits,
-    )
+      // Get conversation messages for context
+      const messages = this.conversationManager.getMessagesForAI(userId)
+      logger.debug(`Retrieved ${messages.length} messages for text processing for user ${userId}`)
 
-    const transactions = Array.isArray(aiResult) ? aiResult : [aiResult]
+      if (messages.length === 0 || !messages.some((m) => {
+        return m.role === 'user' && m.content.trim() !== ''
+      })) {
+        throw new Error('No transaction description found. Please provide a description of your transaction.')
+      }
 
-    // Save result and update status
-    this.conversationManager.saveTransactions(userId, transactions)
-    this.conversationManager.updateStatus(userId, STATUS_MAP.AWAITING_CONFIRMATION)
+      // Process the text using AI service
+      logger.debug(`Sending text to AI for processing for user ${userId}`)
+      const aiResult = await this.aiService.processReceiptAndComments(
+        [], // No images for text-based transactions
+        messages,
+        categories,
+        tags,
+        budgetLimits,
+      )
 
-    return transactions
+      const transactions = Array.isArray(aiResult) ? aiResult : [aiResult]
+
+      if (transactions.length === 0) {
+        throw new Error('Failed to create any transactions from the text description. Please try with more details.')
+      }
+
+      logger.info(`Generated ${transactions.length} transactions from text for user ${userId}`)
+
+      // Validate transactions
+      this.validateTransactions(transactions)
+
+      // Save result and update status
+      this.conversationManager.saveTransactions(userId, transactions)
+      this.conversationManager.updateStatus(userId, STATUS_MAP.AWAITING_CONFIRMATION)
+
+      return transactions
+    }
+    catch (error) {
+      logger.error(`Error processing text transaction for user ${userId}:`, error)
+
+      // Pass along the original error without modifying it
+      // This allows detailed AI API errors to reach the user
+
+      throw error
+    }
+  }
+
+  // Helper method to validate transactions before saving
+  private validateTransactions(transactions: Transaction[]): void {
+    for (const transaction of transactions) {
+      // Check required fields
+      if (transaction.amount <= 0) {
+        throw new Error('Transaction amount must be greater than zero')
+      }
+
+      if (!transaction.description || transaction.description.trim() === '') {
+        throw new Error('Transaction must have a description')
+      }
+
+      if (!transaction.category || !transaction.category.id) {
+        throw new Error('Transaction must have a category')
+      }
+
+      if (!transaction.date) {
+        throw new Error('Transaction must have a date')
+      }
+    }
+  }
+
+  // Helper method to fetch financial data
+  private async fetchFinancialData(userId: string) {
+    try {
+      logger.debug(`Fetching financial data for text transaction for user ${userId}`)
+
+      const results = await Promise.all([
+        this.financialService.getCategories(),
+        this.financialService.getTags(),
+        this.financialService.getBudgetLimits(),
+        this.financialService.fetchAndSetDefaultAccount(),
+      ])
+
+      return results.slice(0, 3) as [typeof results[0], typeof results[1], typeof results[2]]
+    }
+    catch (error) {
+      logger.error(`Failed to fetch financial data for text transaction for user ${userId}:`, error)
+      throw new Error(`Failed to fetch required data from financial service: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
   private async handleComment(ctx: Context, userId: string, text: string, conversation: ReturnType<ConversationManager['getOrCreateConversation']>) {
@@ -491,22 +557,66 @@ export class FinanceBot {
   }
 
   private async handleProcessingError(ctx: Context, userId: string, error: unknown): Promise<void> {
-    console.error('Error processing receipt:', error)
     const attempts = this.conversationManager.incrementProcessingAttempts(userId)
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
+    const errorMessage = error instanceof Error ? error.message : String(error)
 
+    // Create a logger instance using a closure to include userId in all log messages
+    const logger = createLogger(`FinanceBot:${userId.substring(0, 6)}`)
+
+    logger.error('Processing error:', {
+      attempts,
+      error,
+      errorMessage,
+    })
+
+    // Save the error to conversation state for retry
+    this.conversationManager.setLastError(userId, errorMessage)
+
+    // Different handling based on number of attempts
     if (attempts >= MAX_PROCESSING_ATTEMPTS) {
-      await ctx.reply('Failed to process the receipt after several attempts. Please try sending a clearer image or start over with the /start command')
-      this.conversationManager.resetConversation(userId)
+      logger.info(`Maximum attempts (${MAX_PROCESSING_ATTEMPTS}) reached, resetting conversation`)
+
+      try {
+        await ctx.reply(
+          'Failed to process the receipt after several attempts. '
+          + 'This could be due to:'
+          + '\n- Image quality issues'
+          + '\n- Complex receipt format'
+          + '\n- Connection problems with the processing service'
+          + '\n\nPlease try again with a clearer image or start over with the /start command.',
+        )
+
+        // Reset the conversation to start fresh
+        this.conversationManager.resetConversation(userId)
+      }
+      catch (replyError) {
+        logger.error('Failed to send max attempts error message to user:', replyError)
+      }
     }
     else {
-      // Change status back to awaiting_comment to allow refinement/retry
-      this.conversationManager.updateStatus(userId, STATUS_MAP.AWAITING_COMMENT)
-      // Save the error to conversation state for retry
-      this.conversationManager.setLastError(userId, errorMessage)
+      logger.info(`Attempt ${attempts} failed, allowing retry`)
 
-      // Use UIFormatter to create retry keyboard
-      await ctx.reply(`An error occurred while processing the receipt: ${errorMessage}`, this.uiFormatter.getRetryKeyboard())
+      try {
+        // Change status back to awaiting_comment to allow refinement/retry
+        this.conversationManager.updateStatus(userId, STATUS_MAP.AWAITING_COMMENT)
+
+        // Display the complete error message to the user
+        const userMessage = `Error: ${errorMessage}`
+
+        // Use UIFormatter to create retry keyboard
+        await ctx.reply(userMessage, this.uiFormatter.getRetryKeyboard())
+      }
+      catch (replyError) {
+        logger.error('Failed to send error message to user:', replyError)
+
+        // Last resort fallback
+        try {
+          await ctx.reply('An error occurred. Please try again or type /start to reset.')
+        }
+        catch {
+          logger.error('Failed to send fallback error message')
+        }
+      }
     }
   }
 
@@ -581,43 +691,99 @@ export class FinanceBot {
   }
 
   private async confirmTransaction(ctx: Context, userId: string): Promise<void> {
+    const userLogger = createLogger(`FinanceBot:${userId.substring(0, 6)}`)
+    userLogger.info('Confirming transaction')
+
     const conversation = this.conversationManager.getOrCreateConversation(userId)
 
     if (!conversation.currentTransactions || conversation.currentTransactions.length === 0) {
+      userLogger.warn('No transactions found for confirmation')
       await ctx.reply('No transactions found for confirmation.')
 
       return
     }
 
     try {
-      await ctx.reply('Sending transactions...') // Acknowledge confirmation
+      // Send acknowledgement to user
+      await ctx.reply('Sending transactions...')
+
+      // Get transaction details for logging
+      const transactionCount = conversation.currentTransactions.length
+      const totalAmount = conversation.currentTransactions.reduce((sum, t) => {
+        return sum + t.amount
+      }, 0)
+      userLogger.info(`Sending ${transactionCount} transactions with total amount ${totalAmount}`)
+
+      // Send to financial service
       const result = await this.financialService.sendTransactions(conversation.currentTransactions)
 
       if (result) {
-        await this.sendSuccessMessage(ctx, conversation.currentTransactions)
+        userLogger.info('Transactions sent successfully')
+        try {
+          await this.sendSuccessMessage(ctx, conversation.currentTransactions)
+
+          // Clean up after successful transaction
+          this.conversationManager.clearOldImages(userId, 0)
+          this.conversationManager.resetConversation(userId, false)
+          userLogger.debug('Conversation reset after successful transaction')
+        }
+        catch (successError) {
+          userLogger.error('Error sending success message:', successError)
+          // Still consider the operation successful even if we couldn't show success message
+          await ctx.reply('Transactions have been successfully sent!')
+
+          // Still clean up
+          this.conversationManager.clearOldImages(userId, 0)
+          this.conversationManager.resetConversation(userId, false)
+        }
       }
       else {
-        await ctx.reply('An error occurred while sending the transactions. Please check the service and try confirming again or cancel.')
+        // Service returned false but not an error
+        userLogger.warn('Financial service returned failure')
+        await ctx.reply(
+          'The financial service could not process the transactions. This might be due to:'
+          + '\n- Invalid transaction data'
+          + '\n- Service temporarily unavailable'
+          + '\n\nPlease try confirming again or cancel.',
+        )
         // Keep state as awaiting_confirmation so user can retry confirm/refine/cancel
         this.conversationManager.updateStatus(userId, STATUS_MAP.AWAITING_CONFIRMATION)
       }
-
-      // Only reset conversation fully on success
-      if (result) {
-        // Clear images before resetting dialog (only if successful)
-        this.conversationManager.clearOldImages(userId, 0)
-        this.conversationManager.resetConversation(userId, false)
-      }
     }
     catch (error) {
-      console.error('Error confirming transactions:', error)
-      await ctx.reply('An error occurred while sending the transactions. Please try confirming again or cancel.')
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      userLogger.error('Error confirming transactions:', error)
+
+      // Determine appropriate user-facing message based on error type
+      let userMessage: string
+
+      if (errorMessage.includes('network') || errorMessage.includes('timeout')
+        || errorMessage.includes('connect') || errorMessage.includes('fetch')) {
+        userMessage = 'Could not connect to the financial service. Please check your internet connection and try again.'
+      }
+      else if (errorMessage.includes('authentication') || errorMessage.includes('token')
+        || errorMessage.includes('unauthorized') || errorMessage.includes('403')) {
+        userMessage = 'Authentication error with the financial service. Please contact the administrator.'
+      }
+      else if (errorMessage.includes('default') || errorMessage.includes('account')) {
+        userMessage = 'Could not find the default account in the financial service. Please check your configuration.'
+      }
+      else {
+        userMessage = 'An error occurred while sending the transactions. Please try confirming again or cancel.'
+      }
+
+      await ctx.reply(userMessage)
+
       // Keep state as awaiting_confirmation so user can retry confirm/refine/cancel
       this.conversationManager.updateStatus(userId, STATUS_MAP.AWAITING_CONFIRMATION)
     }
   }
 
   private async sendSuccessMessage(ctx: Context, transactions: Transaction[]): Promise<void> {
+    const userId = this.getUserId(ctx)
+    const userLogger = createLogger(`FinanceBot:${userId.substring(0, 6)}`)
+    userLogger.debug('Formatting success message')
+
     // Edit the "Sending transactions..." message instead of sending a new one
     const messageOptions = {
       chat_id: ctx.chat?.id,
@@ -628,17 +794,46 @@ export class FinanceBot {
 
     try {
       if (messageOptions.chat_id && messageOptions.message_id) {
+        userLogger.debug('Editing previous message with success text')
         // Edit the original message (that had the buttons)
-        await ctx.telegram.editMessageText(messageOptions.chat_id, messageOptions.message_id, undefined, successText)
+        await ctx.telegram.editMessageText(
+          messageOptions.chat_id,
+          messageOptions.message_id,
+          undefined,
+          successText,
+        )
       }
       else {
+        userLogger.debug('No previous message to edit, sending new success message')
         // Fallback if message ID is not available
         await ctx.reply(successText)
       }
+
+      // Optionally send a follow-up message inviting the user to send more receipts
+      await ctx.reply('You can send me another receipt or transaction description whenever you\'re ready.')
     }
     catch (error) {
-      console.warn('Failed to edit success message, sending reply instead:', error)
-      await ctx.reply(successText) // Fallback to sending a new message
+      userLogger.warn('Failed to edit success message, sending reply instead:', error)
+      // Try to get the error message, but don't expose API details to users
+      let fallbackErrorMessage = 'telegram message edit failed'
+
+      if (error instanceof Error // Check for Telegram-specific errors that might indicate the message is too old
+        && (error.message.includes('message to edit not found')
+          || error.message.includes('message can\'t be edited'))) {
+        fallbackErrorMessage = 'the original message can no longer be edited'
+      }
+
+      try {
+        // Add context to the success message when falling back
+        await ctx.reply(
+          `${successText}\n\n(Note: Could not update previous message because ${fallbackErrorMessage})`,
+        )
+      }
+      catch (secondError) {
+        // Last resort if even the fallback fails
+        userLogger.error('Failed to send fallback success message:', secondError)
+        await ctx.reply('Transaction completed successfully!')
+      }
     }
   }
 }
