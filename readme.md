@@ -123,7 +123,7 @@ Key components:
 - **ReceiptProcessor**: Coordinates AI and financial service integration
 - **BaseAIClient**: Base class for AI API communication
 - **TransactionProcessorAIClient**: OpenRouter AI service for receipt processing
-- **AnalyticsAIClient**: Interface for future AI analytics capabilities  
+- **AnalyticsAIClient**: Interface for future AI analytics capabilities
 - **FireflyFinancialServiceClient**: Firefly-III API client
 
 The services follow a modular architecture with base classes for API communication and specialized classes for specific functionality, enabling easy extension and maintenance.

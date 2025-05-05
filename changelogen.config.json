@@ -1,0 +1,35 @@
+{
+  "types": {
+    "feat": { "title": "🚀 Новые функции" },
+    "fix": { "title": "🐛 Исправления" },
+    "docs": { "title": "📚 Документация" },
+    "style": { "title": "💅 Стиль" },
+    "refactor": { "title": "⚙️ Улучшения" },
+    "perf": { "title": "⚡ Производительность" },
+    "test": { "title": "✅ Тесты" },
+    "build": { "title": "📦 Сборка" },
+    "ci": { "title": "👷 CI" },
+    "chore": { "title": "🔧 Прочее" }
+  },
+  "titles": {
+    "breakingChanges": "⚠️ Критические изменения"
+  },
+  "contributors": true,
+  "capitalize": true,
+  "github": {
+    "repo": "{repo}",
+    "release": true
+  },
+  "includeMessages": [
+    "feat",
+    "fix",
+    "docs",
+    "style",
+    "refactor",
+    "perf",
+    "test",
+    "build",
+    "ci",
+    "chore"
+  ]
+}

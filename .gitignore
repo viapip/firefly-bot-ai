@@ -28,3 +28,5 @@ prompt.template
 
 firefly-iii-*
 .tmp
+
+**/.claude/settings.local.json

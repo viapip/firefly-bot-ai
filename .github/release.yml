@@ -1,0 +1,34 @@
+changelog:
+  exclude:
+    labels:
+    - ignore-for-release
+    authors:
+    - dependabot
+  categories:
+  - title: 🚀 Новые функции
+    labels:
+    - feature
+    - enhancement
+    commits:
+    - feat*
+    - feature*
+  - title: 🐛 Исправления
+    labels:
+    - fix
+    - bugfix
+    commits:
+    - fix*
+  - title: ⚙️ Улучшения
+    labels:
+    - refactor
+    commits:
+    - refactor*
+    - perf*
+  - title: 📚 Документация
+    labels:
+    - documentation
+    commits:
+    - docs*
+  - title: 🔧 Прочие изменения
+    labels:
+    - '*'
